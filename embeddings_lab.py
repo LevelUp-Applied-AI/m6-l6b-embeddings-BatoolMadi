@@ -133,6 +133,80 @@ def compare_similarities(texts, queries, tfidf_sim, glove_embeddings,
 
     return results
 
+# Tier 1
+def l2_normalize(vectors):
+    return vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-8)
+
+
+def euclidean_distance_matrix(vectors):
+    n = len(vectors)
+    dist = np.zeros((n, n))
+
+    for i in range(n):
+        for j in range(n):
+            dist[i, j] = np.linalg.norm(vectors[i] - vectors[j])
+
+    return dist
+
+# Tier 2
+def analyze_tokenization(texts, tokenizer):
+    word_counts = []
+    subword_splits = {}
+
+    for text in texts:
+        words = text.split()
+        bert_tokens = tokenizer.tokenize(text)
+
+        word_counts.append(len(bert_tokens) / max(len(words), 1))
+
+        for w in words:
+            tokens = tokenizer.tokenize(w)
+            if len(tokens) > 1:
+                subword_splits[w] = subword_splits.get(w, 0) + 1
+
+    avg_subwords = np.mean(word_counts)
+
+    top_subwords = sorted(subword_splits.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    return avg_subwords, top_subwords
+
+# Tier 3
+def precision_at_k(ranked_list, relevant_set, k):
+    top_k = ranked_list[:k]
+    return sum(1 for x in top_k if x in relevant_set) / k
+
+
+def reciprocal_rank(ranked_list, relevant_set):
+    for i, item in enumerate(ranked_list):
+        if item in relevant_set:
+            return 1 / (i + 1)
+    return 0
+
+
+def evaluate_system(rankings, relevance_dict):
+    results = {
+        "tfidf": {"mrr": 0, "p3": 0, "p5": 0},
+        "glove": {"mrr": 0, "p3": 0, "p5": 0},
+        "bert": {"mrr": 0, "p3": 0, "p5": 0},
+    }
+
+    n = len(rankings)
+
+    for query, methods in rankings.items():
+        relevant = set(relevance_dict[query])
+
+        for method in ["tfidf", "glove", "bert"]:
+            ranked = [x[0] for x in methods[method]]
+
+            results[method]["mrr"] += reciprocal_rank(ranked, relevant)
+            results[method]["p3"] += precision_at_k(ranked, relevant, 3)
+            results[method]["p5"] += precision_at_k(ranked, relevant, 5)
+
+    for m in results:
+        for k in results[m]:
+            results[m][k] /= n
+
+    return results
 
 if __name__ == "__main__":
     import torch
@@ -144,42 +218,39 @@ if __name__ == "__main__":
     print(f"Loaded {len(texts)} texts")
 
     # Task 1: TF-IDF
-    result = build_tfidf(texts)
-    if result:
-        tfidf_matrix, vectorizer = result
-        print(f"TF-IDF matrix shape: {tfidf_matrix.shape}")
-        tfidf_sim = compute_tfidf_similarity(tfidf_matrix)
-        if tfidf_sim is not None:
-            print(f"TF-IDF similarity matrix shape: {tfidf_sim.shape}")
+    tfidf_matrix, vectorizer = build_tfidf(texts)
+    print(f"TF-IDF matrix shape: {tfidf_matrix.shape}")
+
+    tfidf_sim = compute_tfidf_similarity(tfidf_matrix)
+    print(f"TF-IDF similarity matrix shape: {tfidf_sim.shape}")
 
     # Task 2: GloVe
     glove = load_glove("data/glove_50k_50d.txt")
-    if glove:
-        print(f"Loaded {len(glove)} GloVe vectors")
-        sample_emb = text_to_glove(texts[0], glove)
-        if sample_emb is not None:
-            print(f"Sample GloVe text embedding shape: {sample_emb.shape}")
+    print(f"Loaded {len(glove)} GloVe vectors")
+
+    sample_emb = text_to_glove(texts[0], glove)
+    print(f"Sample GloVe text embedding shape: {sample_emb.shape}")
 
     # Task 3: DistilBERT
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
     model = AutoModel.from_pretrained("distilbert-base-uncased")
     model.eval()
-    sample_bert = extract_bert_embedding(texts[0], tokenizer, model)
-    if sample_bert is not None:
-        print(f"Sample BERT embedding shape: {sample_bert.shape}")
 
-    # Task 4: Compare — pick one query per category so the cross-method
-    # ranking comparison is not degenerate (the CSV is sorted by category,
-    # so texts[:5] would all be from the same one).
-    if result and glove and tfidf_sim is not None:
-        queries = [df[df["category"] == cat]["text"].iloc[0]
-                   for cat in df["category"].unique()]
-        comparison = compare_similarities(
-            texts, queries, tfidf_sim, glove, model, tokenizer
-        )
-        if comparison:
-            for q in list(comparison.keys())[:2]:
-                print(f"\nQuery: {q[:80]}...")
-                for method in ["tfidf", "glove", "bert"]:
-                    top = comparison[q].get(method, [])
-                    print(f"  {method}: {[t[:40] for t, _ in top[:3]]}")
+    sample_bert = extract_bert_embedding(texts[0], tokenizer, model)
+    print(f"Sample BERT embedding shape: {sample_bert.shape}")
+
+    # Task 4: Compare
+    queries = [
+        df[df["category"] == cat]["text"].iloc[0]
+        for cat in df["category"].unique()
+    ]
+
+    comparison = compare_similarities(
+        texts, queries, tfidf_sim, glove, model, tokenizer
+    )
+
+    for q in list(comparison.keys())[:2]:
+        print(f"\nQuery: {q[:80]}...")
+        for method in ["tfidf", "glove", "bert"]:
+            top = comparison[q][method]
+            print(f"  {method}: {[t[:40] for t, _ in top]}")
