@@ -4,7 +4,7 @@ Module 6 Week B — Lab: Embeddings Comparison
 Compare three text representation methods — TF-IDF, GloVe, and
 DistilBERT — on the BBC News corpus (5 categories).
 """
-
+import torch
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
