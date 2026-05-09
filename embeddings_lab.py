@@ -4,7 +4,7 @@ Module 6 Week B — Lab: Embeddings Comparison
 Compare three text representation methods — TF-IDF, GloVe, and
 DistilBERT — on the BBC News corpus (5 categories).
 """
-
+import torch
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -16,7 +16,9 @@ def build_tfidf(texts):
 
     Returns (tfidf_matrix, vectorizer).
     """
-    pass
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(texts)
+    return tfidf_matrix, vectorizer
 
 
 def compute_tfidf_similarity(tfidf_matrix):
@@ -24,7 +26,7 @@ def compute_tfidf_similarity(tfidf_matrix):
 
     Returns a numpy array of shape (n, n).
     """
-    pass
+    return sklearn_cosine(tfidf_matrix)
 
 
 def load_glove(filepath):
@@ -32,7 +34,14 @@ def load_glove(filepath):
 
     Returns a dict mapping each word to a numpy array.
     """
-    pass
+    embeddings = {}
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            parts = line.strip().split()
+            word = parts[0]
+            vec = np.array(parts[1:], dtype=float)
+            embeddings[word] = vec
+    return embeddings
 
 
 def text_to_glove(text, embeddings):
@@ -41,7 +50,13 @@ def text_to_glove(text, embeddings):
     Skip out-of-vocabulary words. If every word is OOV, return a zero
     vector of shape (50,).
     """
-    pass
+    words = text.lower().split()
+    vectors = [embeddings[w] for w in words if w in embeddings]
+
+    if len(vectors) == 0:
+        return np.zeros(50)
+
+    return np.mean(vectors, axis=0)
 
 
 def extract_bert_embedding(text, tokenizer, model):
@@ -49,7 +64,25 @@ def extract_bert_embedding(text, tokenizer, model):
 
     Returns a numpy array of shape (768,).
     """
-    pass
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512
+    )
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    last_hidden = outputs.last_hidden_state  # (1, seq_len, 768)
+    attention_mask = inputs["attention_mask"].unsqueeze(-1)  # (1, seq_len, 1)
+
+    masked = last_hidden * attention_mask
+    summed = masked.sum(dim=1)
+    counts = attention_mask.sum(dim=1)
+
+    embedding = summed / counts
+    return embedding.squeeze(0).numpy()
 
 
 def compare_similarities(texts, queries, tfidf_sim, glove_embeddings,
@@ -63,7 +96,42 @@ def compare_similarities(texts, queries, tfidf_sim, glove_embeddings,
                       "glove": [(text, score), ...],
                       "bert":  [(text, score), ...]}}
     """
-    pass
+    results = {}
+
+    # Precompute embeddings
+    glove_vecs = [text_to_glove(t, glove_embeddings) for t in texts]
+
+    bert_vecs = [
+        extract_bert_embedding(t, bert_tokenizer, bert_model)
+        for t in texts
+    ]
+
+    glove_sim = sklearn_cosine(glove_vecs)
+    bert_sim = sklearn_cosine(bert_vecs)
+
+    for q in queries:
+        if q not in texts:
+            continue
+
+        q_idx = texts.index(q)
+
+        def top3(sim_matrix):
+            scores = list(enumerate(sim_matrix[q_idx]))
+            scores = [
+                (texts[i], s)
+                for i, s in scores
+                if i != q_idx
+            ]
+            scores.sort(key=lambda x: x[1], reverse=True)
+            return scores[:3]
+
+        results[q] = {
+            "tfidf": top3(tfidf_sim),
+            "glove": top3(glove_sim),
+            "bert": top3(bert_sim),
+        }
+
+    return results
 
 
 if __name__ == "__main__":
